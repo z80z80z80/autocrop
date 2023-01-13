@@ -3,28 +3,30 @@ import numpy as np
 import argparse
 import os, glob, pathlib
 from multiprocessing import Pool
+from pathlib import Path
+
+
+RATIO = 2.0
 
 def order_rect(points):
-    # idea: https://www.pyimagesearch.com/2014/08/25/4-point-opencv-getperspective-transform-example/
     # initialize result -> rectangle coordinates (4 corners, 2 coordinates (x,y))
-    res = np.zeros((4, 2), dtype=np.float32)    
+    res = np.zeros((4, 2), dtype=np.float32)
 
-    # top-left corner: smallest sum
-    # top-right corner: smallest difference
-    # bottom-right corner: largest sum
-    # bottom-left corner: largest difference
+    left_to_right = points[points[:, 0].argsort()] # Sorted by x
 
-    s = np.sum(points, axis = 1)    
-    d = np.diff(points, axis = 1)
+    left_points = left_to_right[:2,:]
+    left_points = left_points[left_points[:, 1].argsort()] # Sorted by y
+    right_points = left_to_right[2:,:]
+    right_points = right_points[right_points[:, 1].argsort()] # Sorted by y
 
-    res[0] = points[np.argmin(s)]
-    res[1] = points[np.argmin(d)]
-    res[2] = points[np.argmax(s)]
-    res[3] = points[np.argmax(d)]
+    res[0] = left_points[0]
+    res[1] = right_points[0]
+    res[2] = right_points[1]
+    res[3] = left_points[1]
 
     return res
 
-def four_point_transform(img, points):    
+def four_point_transform(img, points):
     # copied from: https://www.pyimagesearch.com/2014/08/25/4-point-opencv-getperspective-transform-example/
     # obtain a consistent order of the points and unpack them
     # individually
@@ -53,78 +55,77 @@ def four_point_transform(img, points):
     # compute the perspective transform matrix and then apply it
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
- 
+
     # return the warped image
     return warped
 
 def cont(img, gray, user_thresh, crop):
-    found = False
-    loop = False
-    old_val = 0 # thresh value from 2 iterations ago
-    i = 0 # number of iterations
 
     im_h, im_w = img.shape[:2]
-    while found == False: # repeat to find the right threshold value for finding a rectangle
-        if user_thresh >= 255 or user_thresh == 0 or loop: # maximum threshold value, minimum threshold value 
-                                                 # or loop detected (alternating between 2 threshold values 
-                                                 # without finding borders            
-            break # stop if no borders could be detected
+    im_area = im_w * im_h
 
-        ret, thresh = cv2.threshold(gray, user_thresh, 255, cv2.THRESH_BINARY)
-        contours = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]        
-        im_area = im_w * im_h
-        
+    Blur = cv2.GaussianBlur(gray,(5,5),1) #apply blur to roi
+
+    # TODO Always resize to the same size (instead of using a constant ratio)
+    res_gray = cv2.resize(Blur,(int(im_w/RATIO), int(im_h/RATIO)), interpolation = cv2.INTER_CUBIC)
+
+    while user_thresh > 0 and user_thresh <= 255:
+
+        print(f"Detect with threshold: {user_thresh}")
+
+        ret, thresh = cv2.threshold(res_gray, user_thresh, 255, cv2.THRESH_BINARY)
+        contours = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
+
+        large_contours = 0
+        kept_contours = []
+        thres_incr = 0
+
         for cnt in contours:
+            # Resize the image for the detection
+            cnt[:, :, 0] = cnt[:, :, 0] * RATIO
+            cnt[:, :, 1] = cnt[:, :,  1] * RATIO
             area = cv2.contourArea(cnt)
             if area > (im_area/100) and area < (im_area/1.01):
-                epsilon = 0.1 * cv2.arcLength(cnt,True)
-                approx = cv2.approxPolyDP(cnt,epsilon,True)
+                large_contours += 1
+
+                epsilon = 0.07 * cv2.arcLength(cnt,True)
+                approx = cv2.approxPolyDP(cnt, epsilon, True)
 
                 if len(approx) == 4:
-                    found = True
+                    print(f"Found an image !")
+                    kept_contours.append(approx)
                 elif len(approx) > 4:
-                    user_thresh = user_thresh - 1
-                    print(f"Adjust Threshold: {user_thresh}")
-                    if user_thresh == old_val + 1:
-                        loop = True
-                    break
+                    thres_incr -= 1
                 elif len(approx) < 4:
-                    user_thresh = user_thresh + 5
-                    print(f"Adjust Threshold: {user_thresh}")
-                    if user_thresh == old_val - 5:
-                        loop = True
-                    break
+                    thres_incr += 1
 
-                rect = np.zeros((4, 2), dtype = np.float32)
-                rect[0] = approx[0]
-                rect[1] = approx[1]
-                rect[2] = approx[2]
-                rect[3] = approx[3]
-                
-                dst = four_point_transform(img, rect)
-                dst_h, dst_w = dst.shape[:2]
-                img = dst[crop:dst_h-crop, crop:dst_w-crop]
-            else:
-                if i > 100:
-                    # if this happens a lot, increase the threshold, maybe it helps, otherwise just stop
-                    user_thresh = user_thresh + 5
-                    if user_thresh > 255:
-                        break
-                    print(f"Adjust Threshold: {user_thresh}")
-                    print("WARNING: This seems to be an edge case. If the result isn't satisfying try lowering the threshold using -t")
-                    if user_thresh == old_val - 5:
-                        loop = True                
-        i += 1
-        if i%2 == 0:
-            old_value = user_thresh
+        print(f"Contours {len(contours)} with {large_contours} large and {len(kept_contours)} images found")
 
-    return found, img
+        if large_contours == len(kept_contours):
+            break
+        elif thres_incr == 0:
+            print("WARNING: This seems to be an edge case.")
+            break
+        else:
+            user_thresh += thres_incr
 
-def get_name(filename):
-    f_reversed = filename[::-1]
-    index = -1 * f_reversed.find('/') - 1
+    found_images = []
 
-    return filename[index:]
+    for approx in kept_contours:
+
+        rect = np.zeros((4, 2), dtype = np.float32)
+        rect[0] = approx[0]
+        rect[1] = approx[1]
+        rect[2] = approx[2]
+        rect[3] = approx[3]
+
+        dst = four_point_transform(img, rect)
+
+        dst_h, dst_w = dst.shape[:2]
+        sub_img = dst[crop:dst_h-crop, crop:dst_w-crop]
+        found_images.append(sub_img)
+
+    return len(found_images), found_images
 
 def autocrop(params):
     thresh = params['thresh']
@@ -132,29 +133,33 @@ def autocrop(params):
     filename = params['filename']
     out_path = params['out_path']
     black_bg = params['black']
+    rotation = params['rotation']
 
     print(f"Opening: {filename}")
-    name = get_name(filename) # only the part after the folder
+    name = Path(filename).stem # only the part after the folder
     img = cv2.imread(filename)
     if black_bg: # invert the image if the background is black
         img = invert(img)
 
-    #add white background (in case one side is cropped right already, otherwise script would fail finding contours)
+    if rotation:
+        img = cv2.rotate(img, rotation)
+
+    # add white background (in case one side is cropped right already, otherwise script would fail finding contours)
     img = cv2.copyMakeBorder(img,100,100,100,100, cv2.BORDER_CONSTANT,value=[255,255,255])
-    im_h, im_w = img.shape[:2]
     gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-    res_gray = cv2.resize(img,(int(im_w/6), int(im_h/6)), interpolation = cv2.INTER_CUBIC)
-    found, img = cont(img, gray, thresh, crop)
+
+    found, found_images = cont(img, gray, thresh, crop)
 
     if found:
-        print(f"Saveing to: {out_path}/{name}")
-        try:
-            if black_bg:
-                img = ~img
-            cv2.imwrite(f"{out_path}/{name}", img, [int(cv2.IMWRITE_JPEG_QUALITY), 100]) 
-        except:
-            None
-        # TODO: this is always writing JPEG, no matter what was the input file type, can we detect this?
+        for idx, img in enumerate(found_images):
+            print(f"Saveing to: {out_path}/{name}-{idx}.jpg")
+            try:
+                if black_bg:
+                    img = ~img
+                cv2.imwrite(f"{out_path}/{name}-{idx}.jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
+            except:
+                None
+            # TODO: this is always writing JPEG, no matter what was the input file type, can we detect this?
 
     else:
         # if no contours were found, write input file to "failed" folder
@@ -174,15 +179,17 @@ def invert(img):
     return ~img
 
 def main():
-    parser = argparse.ArgumentParser(description = "Crop/Rotate images automatically. Images should be single images on white background.")
+    parser = argparse.ArgumentParser(description = "Crop/Rotate images automatically. Images should be large enough on white background.")
     parser.add_argument("-i", metavar="INPUT_PATH", default=".",
                         help="Input path. Specify the folder containing the images you want be processed.")
     parser.add_argument("-o", metavar="OUTPUT_PATH", default="crop/",
                         help="Output path. Specify the folder name to which processed images will be written.")
+    parser.add_argument("-r", metavar="ROTATE", type=int, default=0,
+                        help="Rotation value.")
     parser.add_argument("-t", metavar="THRESHOLD", type=int, default=200,
                         help="Threshold value. Higher values represent less aggressive contour search. \
                                 If it's chosen too high, a white border will be introduced")
-    parser.add_argument("-c", metavar="CROP", type=int, default=15,
+    parser.add_argument("-c", metavar="CROP", type=int, default=0,
                         help="Standard extra crop. After crop/rotate often a small white border remains. \
                                 This removes this. If it cuts off too much of your image, adjust this.")
     parser.add_argument("-b", "--black", action="store_true",
@@ -204,6 +211,18 @@ def main():
     num_threads = args.p
     single = args.single
     black = args.black
+    match args.r:
+        case 180:
+            rotation = cv2.ROTATE_180
+        case 90:
+            rotation = cv2.ROTATE_90_CLOCKWISE
+        case -90:
+            rotation = cv2.ROTATE_90_COUNTERCLOCKWISE
+        case 0:
+            rotation = None
+        case _:
+            print("Invalid roation")
+            return
 
     if not os.path.exists(out_path):
         os.makedirs(out_path)
@@ -232,14 +251,15 @@ def main():
                 print("Automatic thread detection didn't work. Defaulting to 1 thread only. \
                         Please specify the correct number manually via the '-p' argument.")
                 num_threads = 1
-        
+
         params = []
         for f in files:
-            params.append({"thresh": thresh, 
-                            "crop": crop, 
-                            "filename": f, 
+            params.append({"thresh": thresh,
+                            "crop": crop,
+                            "filename": f,
                             "out_path": out_path,
-                            "black": black})
+                            "black": black,
+                            "rotation": rotation})
 
         with Pool(num_threads) as p:
             results = p.map(autocrop, params)
