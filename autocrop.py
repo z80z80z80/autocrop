@@ -197,7 +197,7 @@ def main():
     parser.add_argument("-b", "--black", action="store_true",
                         help="Set this if you are using black/very dark (but uniform) backgrounds.")
     parser.add_argument("-q", "--quality", type=int, default=92,
-                        help="JPEG quality for output images.")
+                        help="JPEG quality for output images (Default = 92).")
 
     parser.add_argument("-p", metavar="THREADS", type=int, default=None,
                         help="Specify the number of threads to be used to process the images in parallel. \
