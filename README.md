@@ -26,6 +26,7 @@ This creates a new folder `crop` where all cropped and rotated images will be sa
 |`-h, --help`| Show this help message and exit.|
 |  `-i INPUT_PATH`| Input path. Specify the folder containing the images you want be processed.|
 |`-o OUTPUT_PATH`| Output path. Specify the folder name to which processed images will be written.|
+|`-r ROTATION`| Rotate images before cropping. Values can be 0 (Default), 90, -90 or 180.|
 |`-t THRESHOLD`| Threshold value. Higher values represent less aggressive contour search. If it's chosen too high, a white border will be introduced.|
 |`-c CROP`| Standard extra crop. After crop/rotate often a small white border remains. This removes this. If it cuts off too much of your image, adjust this.|
 |`-b, --black`| Set this if you are using black/very dark (but uniform) backgrounds.|
