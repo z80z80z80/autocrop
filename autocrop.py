@@ -134,6 +134,7 @@ def autocrop(params):
     out_path = params['out_path']
     black_bg = params['black']
     rotation = params['rotation']
+    quality = params['quality']
 
     print(f"Opening: {filename}")
     name = Path(filename).stem # only the part after the folder
@@ -156,8 +157,9 @@ def autocrop(params):
             try:
                 if black_bg:
                     img = ~img
-                cv2.imwrite(f"{out_path}/{name}-{idx}.jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
+                cv2.imwrite(f"{out_path}/{name}-{idx}.jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
             except:
+                print(f"{out_path}/{name}-{idx}.jpg cannot be saved")
                 None
             # TODO: this is always writing JPEG, no matter what was the input file type, can we detect this?
 
@@ -194,6 +196,8 @@ def main():
                                 This removes this. If it cuts off too much of your image, adjust this.")
     parser.add_argument("-b", "--black", action="store_true",
                         help="Set this if you are using black/very dark (but uniform) backgrounds.")
+    parser.add_argument("-q", "--quality", type=int, default=92,
+                        help="JPEG quality for output images.")
 
     parser.add_argument("-p", metavar="THREADS", type=int, default=None,
                         help="Specify the number of threads to be used to process the images in parallel. \
@@ -223,6 +227,10 @@ def main():
         case _:
             print("Invalid roation")
             return
+    quality = args.quality
+    if quality < 0 or quality > 100:
+        print("Invalid JPEG quality")
+        return
 
     if not os.path.exists(out_path):
         os.makedirs(out_path)
@@ -259,7 +267,8 @@ def main():
                             "filename": f,
                             "out_path": out_path,
                             "black": black,
-                            "rotation": rotation})
+                            "rotation": rotation,
+                            "quality": quality})
 
         with Pool(num_threads) as p:
             results = p.map(autocrop, params)
