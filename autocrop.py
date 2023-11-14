@@ -59,7 +59,7 @@ def four_point_transform(img, points):
     # return the warped image
     return warped
 
-def cont(img, gray, user_thresh, crop):
+def cont(img, gray, user_thresh, crop, filename):
 
     im_h, im_w = img.shape[:2]
     im_area = im_w * im_h
@@ -69,8 +69,10 @@ def cont(img, gray, user_thresh, crop):
     # TODO Always resize to the same size (instead of using a constant ratio)
     res_gray = cv2.resize(Blur,(int(im_w/RATIO), int(im_h/RATIO)), interpolation = cv2.INTER_CUBIC)
 
+    factor = 0.07
+    prev_user_thresh = set()
     while user_thresh > 0 and user_thresh <= 255:
-
+        prev_user_thresh.add(user_thresh)
         print(f"Detect with threshold: {user_thresh}")
 
         ret, thresh = cv2.threshold(res_gray, user_thresh, 255, cv2.THRESH_BINARY)
@@ -85,12 +87,12 @@ def cont(img, gray, user_thresh, crop):
             cnt[:, :, 0] = cnt[:, :, 0] * RATIO
             cnt[:, :, 1] = cnt[:, :,  1] * RATIO
             area = cv2.contourArea(cnt)
-            if area > (im_area/100) and area < (im_area/1.01):
+            if (im_area / 100) < area < (im_area / 1.01):
                 large_contours += 1
 
-                epsilon = 0.07 * cv2.arcLength(cnt,True)
+                epsilon = factor * cv2.arcLength(cnt,True)
                 approx = cv2.approxPolyDP(cnt, epsilon, True)
-
+                print(f"len(approx): {len(approx)}")
                 if len(approx) == 4:
                     print(f"Found an image !")
                     kept_contours.append(approx)
@@ -99,15 +101,20 @@ def cont(img, gray, user_thresh, crop):
                 elif len(approx) < 4:
                     thres_incr += 1
 
-        print(f"Contours {len(contours)} with {large_contours} large and {len(kept_contours)} images found")
+        print(f"Contours {len(contours)} with {large_contours} large and {len(kept_contours)} images found. "
+              f"Factor: {factor}. "
+              f"Filename: {filename}")
 
         if large_contours == len(kept_contours):
             break
         elif thres_incr == 0:
             print("WARNING: This seems to be an edge case.")
-            break
+            factor = factor + 0.01
         else:
             user_thresh += thres_incr
+        if user_thresh in prev_user_thresh:
+            print("WARNING: This seems to be an edge case (reusing user_thresh).")
+            factor = factor + 0.01
 
     found_images = []
 
@@ -149,18 +156,17 @@ def autocrop(params):
     img = cv2.copyMakeBorder(img,100,100,100,100, cv2.BORDER_CONSTANT,value=[255,255,255])
     gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
 
-    found, found_images = cont(img, gray, thresh, crop)
+    found, found_images = cont(img, gray, thresh, crop, filename)
 
     if found:
         for idx, img in enumerate(found_images):
-            print(f"Saveing to: {out_path}/{name}-{idx}.jpg")
+            print(f"Saving to: {out_path}/{name}-{idx}.jpg")
             try:
                 if black_bg:
                     img = ~img
                 cv2.imwrite(f"{out_path}/{name}-{idx}.jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
             except:
                 print(f"{out_path}/{name}-{idx}.jpg cannot be saved")
-                None
             # TODO: this is always writing JPEG, no matter what was the input file type, can we detect this?
 
     else:
@@ -247,6 +253,8 @@ def main():
                     files.append(f)
     else:
         files.append(in_path)
+
+    files.sort()
 
     if len(files) == 0:
         print(f"No image files found in {in_path}\n Exiting.")
